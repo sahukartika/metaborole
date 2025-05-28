@@ -5,7 +5,7 @@ from io import BytesIO
 
 st.set_page_config(page_title="Metaborole", layout="centered")
 
-st.title("🧬 Metaborole - Metabolite Annotator")
+st.title(" Metaborole - Metabolite Annotator")
 st.markdown("Upload a **CSV** or **Excel** file with a list of metabolite names in the **first column**.")
 
 # File uploader (accepts both CSV and Excel)
