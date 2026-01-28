@@ -22,6 +22,17 @@ def extract_kegg_id_from_text(text: str) -> Optional[str]:
     return None
 
 
+def remove_stereo_prefix(s: str) -> str:
+    """
+    Remove leading stereoisomer prefixes:
+      'l-', 'd-', 'dl-' (also with spaces: 'l ', 'd ', 'dl ')
+    Only removes if it appears at the START of the string.
+    """
+    if s is None:
+        return ""
+    return re.sub(r"^(?:dl|d|l)[-\s]+", "", s, flags=re.IGNORECASE).strip()
+
+
 @lru_cache(maxsize=1)
 def load_kegg_name_to_id(json_file: str = str(DEFAULT_JSON_DB)) -> Dict[str, str]:
     """Load name->KEGG mapping from JSON (keys are stored lowercase/stripped)."""
@@ -33,7 +44,7 @@ def load_kegg_name_to_id(json_file: str = str(DEFAULT_JSON_DB)) -> Dict[str, str
         data = json.load(f)
 
     name_to_kegg = data.get("name_to_kegg", {})
-    # Ensure keys are normalized similarly to how the DB was built (lower + strip)
+    # normalize keys the same way the DB was built
     return {str(k).lower().strip(): v for k, v in name_to_kegg.items() if k is not None}
 
 
@@ -43,14 +54,11 @@ def annotate_metabolites(
     deduplicate: bool = True,
 ) -> List[dict]:
     """
-    Strict annotation:
-      - does NOT remove LCMS prefixes
-      - does NOT change hyphens/underscores
-      - does NOT remove L-/D-
-      - does NOT remove brackets/parentheses text
-    Only matching behavior:
-      - case-insensitive (lowercasing)
-      - strips leading/trailing whitespace for lookup (because DB keys were stripped)
+    Annotation logic:
+      1) If KEGG ID already present in the string -> return it
+      2) Exact match on (lower + strip)
+      3) If not found, try removing leading d-/l-/dl- and match again
+      4) Else "Not Found"
     """
     name_to_kegg = load_kegg_name_to_id(json_db_file)
 
@@ -63,26 +71,54 @@ def annotate_metabolites(
         else:
             original = str(name)
 
-        key = original.lower().strip()  # exact match after lowercase + outer-strip
+        key = original.lower().strip()
 
         if deduplicate:
             if key in seen:
                 continue
             seen.add(key)
 
-        # If the user already provided a KEGG ID in the cell, keep it
+        # If user already has a KEGG ID inside the name, keep it
         kegg_in_text = extract_kegg_id_from_text(original)
         if kegg_in_text:
-            kegg_id = kegg_in_text
-            source = "in_name"
-        else:
-            kegg_id = name_to_kegg.get(key)
-            source = "exact" if kegg_id else "not_found"
+            results.append({
+                "Original Name": original,
+                "KEGG ID": kegg_in_text,
+                "Match Source": "in_name",
+                "Matched Query": kegg_in_text,
+            })
+            continue
 
+        # 1) exact
+        kegg_id = name_to_kegg.get(key)
+        if kegg_id:
+            results.append({
+                "Original Name": original,
+                "KEGG ID": kegg_id,
+                "Match Source": "exact",
+                "Matched Query": key,
+            })
+            continue
+
+        # 2) stereo-prefix removed
+        key2 = remove_stereo_prefix(key)
+        if key2 and key2 != key:
+            kegg_id2 = name_to_kegg.get(key2)
+            if kegg_id2:
+                results.append({
+                    "Original Name": original,
+                    "KEGG ID": kegg_id2,
+                    "Match Source": "stereo_prefix_removed",
+                    "Matched Query": key2,
+                })
+                continue
+
+        # not found
         results.append({
             "Original Name": original,
-            "KEGG ID": kegg_id if kegg_id else "Not Found",
-            "Match Source": source,
+            "KEGG ID": "Not Found",
+            "Match Source": "not_found",
+            "Matched Query": key,
         })
 
     return results
